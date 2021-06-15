@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 import math
 import os
@@ -18,6 +19,7 @@ import torch.optim.lr_scheduler as lr_scheduler
 import torch.utils.data
 import yaml
 from torch.cuda import amp
+
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
@@ -97,8 +99,11 @@ def train(hyp, opt, device, tb_writer=None):
         model = Model(opt.cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
     with torch_distributed_zero_first(rank):
         check_dataset(data_dict)  # check
-    train_path = data_dict['train']
-    test_path = data_dict['val']
+    #train_path = data_dict['train']
+    #test_path = data_dict['val']
+    data_path = opt.data_dir
+    train_path = data_path + "/train2017.txt"
+    test_path = data_path + "/val2017.txt"
 
     # Freeze
     freeze = []  # parameter names to freeze (full or partial)
@@ -454,9 +459,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', type=str, default='yolov5s.pt', help='initial weights path')
     parser.add_argument('--cfg', type=str, default='', help='model.yaml path')
-    parser.add_argument('--data', type=str, default='data/coco128.yaml', help='dataset.yaml path')
+    #parser.add_argument('--data', type=str, default='data/coco128.yaml', help='dataset.yaml path')
+    parser.add_argument('--data', type=str, default='data/coco.yaml', help='dataset.yaml path')
     parser.add_argument('--hyp', type=str, default='data/hyp.scratch.yaml', help='hyperparameters path')
-    parser.add_argument('--epochs', type=int, default=300)
+    #parser.add_argument('--epochs', type=int, default=300)
+    parser.add_argument('--epochs', type=int, default=1)
     parser.add_argument('--batch-size', type=int, default=16, help='total batch size for all GPUs')
     parser.add_argument('--img-size', nargs='+', type=int, default=[640, 640], help='[train, test] image sizes')
     parser.add_argument('--rect', action='store_true', help='rectangular training')
@@ -486,6 +493,13 @@ if __name__ == '__main__':
     parser.add_argument('--bbox_interval', type=int, default=-1, help='Set bounding-box image logging interval for W&B')
     parser.add_argument('--save_period', type=int, default=-1, help='Log model after every "save_period" epoch')
     parser.add_argument('--artifact_alias', type=str, default="latest", help='version of dataset artifact to be used')
+    parser.add_argument("--hosts", type=list, default=json.loads(os.environ["SM_HOSTS"]))
+    parser.add_argument("--current_host", type=str, default=os.environ["SM_CURRENT_HOST"])
+    parser.add_argument("--model_dir", type=str, default=os.environ["SM_MODEL_DIR"])
+    parser.add_argument("--data_dir", type=str, default=os.environ["SM_CHANNEL_DATA"])
+    parser.add_argument("--num_gpus", type=int, default=os.environ["SM_NUM_GPUS"])
+
+
     opt = parser.parse_args()
 
     # Set DDP variables
@@ -513,7 +527,9 @@ if __name__ == '__main__':
         assert len(opt.cfg) or len(opt.weights), 'either --cfg or --weights must be specified'
         opt.img_size.extend([opt.img_size[-1]] * (2 - len(opt.img_size)))  # extend to 2 sizes (train, test)
         opt.name = 'evolve' if opt.evolve else opt.name
-        opt.save_dir = str(increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok | opt.evolve))
+        #opt.save_dir = str(increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok | opt.evolve))
+        opt.save_dir = str(increment_path(Path(opt.model_dir) / Path(opt.project) / opt.name, exist_ok=opt.exist_ok | opt.evolve))
+
 
     # DDP mode
     opt.total_batch_size = opt.batch_size
