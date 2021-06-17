@@ -27,6 +27,11 @@ from utils.general import check_requirements, check_file, check_dataset, xyxy2xy
     segment2box, segments2boxes, resample_segments, clean_str
 from utils.torch_utils import torch_distributed_zero_first
 
+
+import smdistributed.dataparallel.torch.distributed as dist
+
+
+
 # Parameters
 help_url = 'https://github.com/ultralytics/yolov5/wiki/Train-Custom-Data'
 img_formats = ['bmp', 'jpg', 'jpeg', 'png', 'tif', 'tiff', 'dng', 'webp', 'mpo']  # acceptable image suffixes
@@ -77,10 +82,13 @@ def create_dataloader(path, imgsz, batch_size, stride, single_cls=False, hyp=Non
                                       pad=pad,
                                       image_weights=image_weights,
                                       prefix=prefix)
+                
+
 
     batch_size = min(batch_size, len(dataset))
     nw = min([os.cpu_count() // world_size, batch_size if batch_size > 1 else 0, workers])  # number of workers
-    sampler = torch.utils.data.distributed.DistributedSampler(dataset) if rank != -1 else None
+    sampler = torch.utils.data.distributed.DistributedSampler(dataset, num_replicas=dist.get_world_size(), rank=dist.get_rank()) if rank != -1 else None
+    
     loader = torch.utils.data.DataLoader if image_weights else InfiniteDataLoader
     # Use torch.utils.data.DataLoader() if dataset.properties will update during training else InfiniteDataLoader()
     dataloader = loader(dataset,
@@ -89,6 +97,9 @@ def create_dataloader(path, imgsz, batch_size, stride, single_cls=False, hyp=Non
                         sampler=sampler,
                         pin_memory=True,
                         collate_fn=LoadImagesAndLabels.collate_fn4 if quad else LoadImagesAndLabels.collate_fn)
+    
+    
+    
     return dataloader, dataset
 
 

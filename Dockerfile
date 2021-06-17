@@ -17,3 +17,4 @@ RUN python -m pip install --upgrade pip
 RUN pip install --no-cache -r requirements.txt coremltools onnx gsutil notebook
 RUN pip install -U smdebug
 
+ENV SAGEMAKER_INSTANCE_TYPE ml.p3.16xlarge

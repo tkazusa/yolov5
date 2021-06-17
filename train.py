@@ -11,7 +11,7 @@ from pathlib import Path
 from threading import Thread
 
 import numpy as np
-import torch.distributed as dist
+# import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
@@ -20,7 +20,7 @@ import torch.utils.data
 import yaml
 from torch.cuda import amp
 
-from torch.nn.parallel import DistributedDataParallel as DDP
+# from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
@@ -38,10 +38,20 @@ from utils.plots import plot_images, plot_labels, plot_results, plot_evolution
 from utils.torch_utils import ModelEMA, select_device, intersect_dicts, torch_distributed_zero_first, de_parallel
 from utils.wandb_logging.wandb_utils import WandbLogger, check_wandb_resume
 
+# SageMaker data parallel: Import the library PyTorch API
+import smdistributed.dataparallel.torch.distributed as dist
+
+# SageMaker data parallel: Import the library PyTorch DDP
+from smdistributed.dataparallel.torch.parallel.distributed import DistributedDataParallel as DDP
+
+# SageMaker data parallel: Initialize the library
+dist.init_process_group()
+
 logger = logging.getLogger(__name__)
 
 
 def train(hyp, opt, device, tb_writer=None):
+    print("-------------training starts--------------------")
     logger.info(colorstr('hyperparameters: ') + ', '.join(f'{k}={v}' for k, v in hyp.items()))
     save_dir, epochs, batch_size, total_batch_size, weights, rank, single_cls = \
         Path(opt.save_dir), opt.epochs, opt.batch_size, opt.total_batch_size, opt.weights, opt.global_rank, \
@@ -99,8 +109,8 @@ def train(hyp, opt, device, tb_writer=None):
         model = Model(opt.cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
     with torch_distributed_zero_first(rank):
         check_dataset(data_dict)  # check
-    #train_path = data_dict['train']
-    #test_path = data_dict['val']
+    # train_path = data_dict['train']
+    # test_path = data_dict['val']
     data_path = opt.data_dir
     train_path = data_path + "/train2017.txt"
     test_path = data_path + "/val2017.txt"
@@ -228,6 +238,7 @@ def train(hyp, opt, device, tb_writer=None):
         model = DDP(model, device_ids=[opt.local_rank], output_device=opt.local_rank,
                     # nn.MultiheadAttention incompatibility with DDP https://github.com/pytorch/pytorch/issues/26698
                     find_unused_parameters=any(isinstance(layer, nn.MultiheadAttention) for layer in model.modules()))
+        model.cuda(opt.local_rank)
 
     # Model parameters
     hyp['box'] *= 3. / nl  # scale to layers
@@ -254,6 +265,7 @@ def train(hyp, opt, device, tb_writer=None):
                 f'Logging results to {save_dir}\n'
                 f'Starting training for {epochs} epochs...')
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
+        print(f"epoch {epoch}")
         model.train()
 
         # Update image weights (optional)
@@ -283,6 +295,7 @@ def train(hyp, opt, device, tb_writer=None):
             pbar = tqdm(pbar, total=nb)  # progress bar
         optimizer.zero_grad()
         for i, (imgs, targets, paths, _) in pbar:  # batch -------------------------------------------------------------
+            print(f"batch {i}")
             ni = i + nb * epoch  # number integrated batches (since train start)
             imgs = imgs.to(device, non_blocking=True).float() / 255.0  # uint8 to float32, 0-255 to 0.0-1.0
 
@@ -459,8 +472,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights', type=str, default='yolov5s.pt', help='initial weights path')
     parser.add_argument('--cfg', type=str, default='', help='model.yaml path')
-    #parser.add_argument('--data', type=str, default='data/coco128.yaml', help='dataset.yaml path')
-    parser.add_argument('--data', type=str, default='data/coco.yaml', help='dataset.yaml path')
+    parser.add_argument('--data', type=str, default='data/coco128.yaml', help='dataset.yaml path')
+    #parser.add_argument('--data', type=str, default='data/coco.yaml', help='dataset.yaml path')
     parser.add_argument('--hyp', type=str, default='data/hyp.scratch.yaml', help='hyperparameters path')
     #parser.add_argument('--epochs', type=int, default=300)
     parser.add_argument('--epochs', type=int, default=1)
@@ -501,16 +514,25 @@ if __name__ == '__main__':
 
 
     opt = parser.parse_args()
+    opt.local_rank = dist.get_local_rank()
+    
+    print("------------------------------------------------------")
+    print(f"opt.local_rank {opt.local_rank}")
+    
 
     # Set DDP variables
+    print("--------------------------Set DDP variables-------------------------")
     opt.world_size = int(os.environ['WORLD_SIZE']) if 'WORLD_SIZE' in os.environ else 1
     opt.global_rank = int(os.environ['RANK']) if 'RANK' in os.environ else -1
     set_logging(opt.global_rank)
     if opt.global_rank in [-1, 0]:
         check_git_status()
         check_requirements(exclude=['thop'])
+    
+    
 
     # Resume
+    print("--------------------------Resume-------------------------")
     wandb_run = check_wandb_resume(opt)
     if opt.resume and not wandb_run:  # resume an interrupted run
         ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run()  # specified or most recent path
@@ -532,10 +554,12 @@ if __name__ == '__main__':
 
 
     # DDP mode
+    print("--------------------------DDP mode-------------------------")
     opt.total_batch_size = opt.batch_size
     device = select_device(opt.device, batch_size=opt.batch_size)
     if opt.local_rank != -1:
         assert torch.cuda.device_count() > opt.local_rank
+        # torch.cuda.set_device(opt.local_rank)
         torch.cuda.set_device(opt.local_rank)
         device = torch.device('cuda', opt.local_rank)
         dist.init_process_group(backend='nccl', init_method='env://')  # distributed backend
@@ -544,17 +568,20 @@ if __name__ == '__main__':
         opt.batch_size = opt.total_batch_size // opt.world_size
 
     # Hyperparameters
+    print("--------------------------Hyperparameters-------------------------")
     with open(opt.hyp) as f:
         hyp = yaml.safe_load(f)  # load hyps
 
     # Train
+    print("--------------------------Train-------------------------")
     logger.info(opt)
     if not opt.evolve:
         tb_writer = None  # init loggers
         if opt.global_rank in [-1, 0]:
             prefix = colorstr('tensorboard: ')
             logger.info(f"{prefix}Start with 'tensorboard --logdir {opt.project}', view at http://localhost:6006/")
-            tb_writer = SummaryWriter(opt.save_dir)  # Tensorboard
+            if opt.local_rank in [-1, 0]:
+                tb_writer = SummaryWriter(opt.save_dir)  # Tensorboard
         train(hyp, opt, device, tb_writer)
 
     # Evolve hyperparameters (optional)
