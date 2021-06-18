@@ -108,7 +108,8 @@ def train(hyp, opt, device, tb_writer=None):
     else:
         model = Model(opt.cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
     with torch_distributed_zero_first(rank):
-        check_dataset(data_dict)  # check
+        # check_dataset(data_dict)  # check
+        print("check pass")
     # train_path = data_dict['train']
     # test_path = data_dict['val']
     data_path = opt.data_dir
@@ -516,12 +517,9 @@ if __name__ == '__main__':
     opt = parser.parse_args()
     opt.local_rank = dist.get_local_rank()
     
-    print("------------------------------------------------------")
-    print(f"opt.local_rank {opt.local_rank}")
-    
 
     # Set DDP variables
-    print("--------------------------Set DDP variables-------------------------")
+    print(f"------------------- Set DDP variables local_rank {opt.local_rank} -------------------------")
     opt.world_size = int(os.environ['WORLD_SIZE']) if 'WORLD_SIZE' in os.environ else 1
     opt.global_rank = int(os.environ['RANK']) if 'RANK' in os.environ else -1
     set_logging(opt.global_rank)
@@ -537,6 +535,7 @@ if __name__ == '__main__':
     if opt.resume and not wandb_run:  # resume an interrupted run
         ckpt = opt.resume if isinstance(opt.resume, str) else get_latest_run()  # specified or most recent path
         assert os.path.isfile(ckpt), 'ERROR: --resume checkpoint does not exist'
+        opt.local_rank = dist.get_local_rank()
         apriori = opt.global_rank, opt.local_rank
         with open(Path(ckpt).parent.parent / 'opt.yaml') as f:
             opt = argparse.Namespace(**yaml.safe_load(f))  # replace
@@ -557,11 +556,19 @@ if __name__ == '__main__':
     print("--------------------------DDP mode-------------------------")
     opt.total_batch_size = opt.batch_size
     device = select_device(opt.device, batch_size=opt.batch_size)
+    
+    print("---- check device id and local_rank ----")
+    print(f"1: local_rank {opt.local_rank}, device {device}, opt.device {opt.device}")
+    
+    
+    
     if opt.local_rank != -1:
         assert torch.cuda.device_count() > opt.local_rank
         # torch.cuda.set_device(opt.local_rank)
         torch.cuda.set_device(opt.local_rank)
+        print(f"2: local_rank {opt.local_rank}, device {device}, opt.device {opt.device}")
         device = torch.device('cuda', opt.local_rank)
+        print(f"3: local_rank {opt.local_rank}, device {device}, opt.device {opt.device}")
         dist.init_process_group(backend='nccl', init_method='env://')  # distributed backend
         assert opt.batch_size % opt.world_size == 0, '--batch-size must be multiple of CUDA device count'
         assert not opt.image_weights, '--image-weights argument is not compatible with DDP training'
