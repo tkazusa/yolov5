@@ -493,6 +493,8 @@ if __name__ == '__main__':
     parser.add_argument('--bbox_interval', type=int, default=-1, help='Set bounding-box image logging interval for W&B')
     parser.add_argument('--save_period', type=int, default=-1, help='Log model after every "save_period" epoch')
     parser.add_argument('--artifact_alias', type=str, default="latest", help='version of dataset artifact to be used')
+    
+    ## ------------------------ SageMaker 学習のための変更箇所① ------------------------ ##  
     parser.add_argument("--hosts", type=list, default=json.loads(os.environ["SM_HOSTS"]))
     parser.add_argument("--current_host", type=str, default=os.environ["SM_CURRENT_HOST"])
     parser.add_argument("--model_dir", type=str, default=os.environ["SM_MODEL_DIR"])
@@ -522,11 +524,14 @@ if __name__ == '__main__':
             '', ckpt, True, opt.total_batch_size, *apriori  # reinstate
         logger.info('Resuming training from %s' % ckpt)
     else:
+        ## ------------------------ SageMaker 学習のための変更箇所② ------------------------ ##  
         # opt.hyp = opt.hyp or ('hyp.finetune.yaml' if opt.weights else 'hyp.scratch.yaml')
         opt.data, opt.cfg, opt.hyp = check_file(opt.data), check_file(opt.cfg), check_file(opt.hyp)  # check files
         assert len(opt.cfg) or len(opt.weights), 'either --cfg or --weights must be specified'
         opt.img_size.extend([opt.img_size[-1]] * (2 - len(opt.img_size)))  # extend to 2 sizes (train, test)
         opt.name = 'evolve' if opt.evolve else opt.name
+        
+        ## ------------------------ SageMaker 学習のための変更箇所③ ------------------------ ##  
         #opt.save_dir = str(increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok | opt.evolve))
         opt.save_dir = str(increment_path(Path(opt.model_dir) / Path(opt.project) / opt.name, exist_ok=opt.exist_ok | opt.evolve))
 
